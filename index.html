@@ -3,6 +3,26 @@
 <head>
   <meta charset="utf-8">
   <title>大陳文化 WebAR 導覽</title>
+  <script>
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = function(constraints) {
+        if (constraints && constraints.video) {
+          // 如果原本是 boolean，轉成 object
+          if (typeof constraints.video === 'boolean') {
+            constraints.video = {};
+          }
+          // 強制塞入進階感光參數
+          constraints.video.advanced = [
+            { exposureMode: "continuous" },
+            { whiteBalanceMode: "continuous" }
+          ];
+        }
+        console.log("已攔截並注入相機曝光參數:", constraints);
+        return originalGetUserMedia(constraints);
+      };
+    }
+  </script>
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
   <style>
@@ -120,4 +140,5 @@
 </body>
 
 </html>
+
 
