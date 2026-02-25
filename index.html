@@ -176,7 +176,42 @@
         timeout: 15000
       });
     }
+    async function tryBoostCameraExposure(){
+  try {
+    // A-Frame 會建立 <video> 元素，AR.js 用它當相機來源
+    const video = document.querySelector("video");
+    if (!video || !video.srcObject) return;
 
+    const track = video.srcObject.getVideoTracks()[0];
+    if (!track) return;
+
+    const caps = track.getCapabilities ? track.getCapabilities() : null;
+    console.log("Camera caps:", caps);
+
+    // 盡可能用「通用且不容易爆」的 constraints
+    const constraints = {};
+
+    // 這兩個在部分 Android 會有效，iOS 多半不理
+    if (caps?.exposureMode) constraints.exposureMode = "continuous";
+    if (caps?.whiteBalanceMode) constraints.whiteBalanceMode = "continuous";
+
+    // 下面幾個看手機支援度（Android 部分機型有效）
+    // 若 caps 沒有就不設，避免報錯
+    if (caps?.brightness) constraints.brightness = caps.brightness.max;
+    if (caps?.contrast) constraints.contrast = caps.contrast.max;
+    if (caps?.saturation) constraints.saturation = caps.saturation.max;
+
+    // 有些機型提供 exposureCompensation（最有用）
+    if (caps?.exposureCompensation) constraints.exposureCompensation = caps.exposureCompensation.max;
+
+    if (Object.keys(constraints).length === 0) return;
+
+    await track.applyConstraints({ advanced: [constraints] });
+    console.log("Applied camera constraints:", constraints);
+  } catch (e) {
+    console.warn("applyConstraints failed (ignored):", e);
+  }
+}
     function onGeoSuccess(position){
       const userLat = position.coords.latitude;
       const userLng = position.coords.longitude;
@@ -244,3 +279,4 @@
 
 </body>
 </html>
+
