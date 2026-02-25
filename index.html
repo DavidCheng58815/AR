@@ -127,7 +127,14 @@
     const debugUI = document.getElementById("debug");
 
     const marker = document.getElementById("dachen-marker");
+    // ===== 音訊設定 =====
+    const audioPlayer = new Audio();
+    audioPlayer.src = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+    audioPlayer.loop = true;
+    audioPlayer.preload = "auto";
 
+    let audioUnlocked = false;  // 是否已完成「使用者互動解鎖音訊」
+    let isPlaying = false;      // 避免 markerFound 重複觸發一直 play
     let unlocked = false;
     let lastDist = null;
 
@@ -154,10 +161,23 @@
       setDebug("Page loaded. Waiting for geolocation...");
 
       // 先讓使用者點一下（iOS 對某些權限/音訊/相機啟動更友善）
-      startBtn.addEventListener("click", () => {
-        // 只要解鎖，就把 UI 蓋掉，開始掃
-        uiLayer.style.display = "none";
-      });
+     startBtn.addEventListener("click", async () => {
+  // 先解鎖音訊（iOS/Android 常需要）
+  if (!audioUnlocked) {
+    try {
+      await audioPlayer.play();   // 先播放一下
+      audioPlayer.pause();        // 再暫停
+      audioPlayer.currentTime = 0;
+      audioUnlocked = true;
+      console.log("Audio unlocked ✅");
+    } catch (e) {
+      console.log("Audio unlock failed (still ok):", e);
+    }
+  }
+
+  // 把 UI 蓋掉，開始掃
+  uiLayer.style.display = "none";
+});
 
       startGeolocation();
       bindMarkerEvents();
@@ -247,18 +267,35 @@
 
     function bindMarkerEvents(){
       // 注意：這段只有在 JS 沒語法錯誤 + AR 正常初始化時才會觸發
-      marker.addEventListener("markerFound", () => {
-        setDebug("markerFound ✅");
-        subtitleUI.textContent = "找到 Hiro！歡迎來到大陳新村！（語音可在此播放）";
-        subtitleUI.style.display = "block";
-        // audioPlayer.play() 之類建議也在「使用者點擊 startBtn 後」再做，iOS 才不會擋
-      });
+     marker.addEventListener("markerFound", async () => {
+  console.log("找到標籤！觸發導覽");
 
-      marker.addEventListener("markerLost", () => {
-        setDebug("markerLost");
-        subtitleUI.style.display = "none";
-      });
+  // 1) 顯示字幕
+  subtitleUI.innerText = "歡迎來到大陳新村！(大陳語音導覽播放中...)";
+  subtitleUI.style.display = "block";
+
+  // 2) 播放音訊（避免重複播放）
+  if (!isPlaying) {
+    try {
+      await audioPlayer.play();
+      isPlaying = true;
+    } catch (error) {
+      console.log("瀏覽器阻擋播放，需要先點擊螢幕", error);
+      subtitleUI.innerText = "請點擊螢幕任意處以播放聲音";
     }
+  }
+});
+
+marker.addEventListener("markerLost", () => {
+  console.log("標籤遺失！停止導覽");
+
+  // 1) 隱藏字幕
+  subtitleUI.style.display = "none";
+
+  // 2) 停止音訊
+  audioPlayer.pause();
+  isPlaying = false;
+});
 
     // Haversine
     function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -279,4 +316,5 @@
 
 </body>
 </html>
+
 
