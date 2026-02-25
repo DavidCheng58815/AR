@@ -1,18 +1,31 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-Hant">
 <head>
+  <!-- =========================================================
+  【A. 基本設定】
+  ========================================================== -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>大陳文化 WebAR 導覽</title>
 
-  <!-- A-Frame / AR.js -->
+  <!-- =========================================================
+  【B. A-Frame / AR.js 載入】
+  - A-Frame：3D 場景引擎
+  - AR.js：Marker AR（Hiro 等黑白標籤）
+  ========================================================== -->
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
+  <!-- =========================================================
+  【C. UI 樣式】
+  - UI Layer：用來顯示定位狀態、按鈕（蓋在 AR 之上）
+  - Subtitle：掃到 marker 後顯示字幕
+  - Debug：測試用（正式可拿掉）
+  ========================================================== -->
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; }
 
-    /* UI 蓋在 AR 上層 */
+    /* 蓋在 AR 上層的 UI */
     #ui-layer{
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.82);
@@ -29,6 +42,7 @@
 
     #distance-text { opacity: 0.9; }
 
+    /* 字幕（掃到 marker 後顯示） */
     #subtitle {
       position: fixed;
       left: 50%;
@@ -45,6 +59,7 @@
       line-height: 1.4;
     }
 
+    /* Debug 面板（測試用） */
     #debug {
       position: fixed;
       left: 10px;
@@ -71,86 +86,131 @@
 
 <body>
 
-  <!-- Debug 區（你測試用，正式可拿掉） -->
+  <!-- =========================================================
+  【D. Debug 區（可選）】
+  ========================================================== -->
   <div id="debug">debug...</div>
 
-  <!-- UI 遮罩：先拿 GPS，確認後才讓使用者開始掃描 -->
+  <!-- =========================================================
+  【E. UI Layer：定位/解鎖/開始掃描】
+  - 初始顯示：正在取得定位
+  - 達到條件後顯示：開始掃描按鈕
+  ========================================================== -->
   <div id="ui-layer">
     <h2 id="status-text">正在初始化…</h2>
     <p id="distance-text"></p>
     <button id="start-btn" style="display:none;">開始掃描 Hiro</button>
     <p style="opacity:.8; font-size:14px; margin-top:8px;">
-      若無法開相機，請確認：<br/>
+      若無法開相機/定位，請確認：<br/>
       1) 網址是 HTTPS<br/>
-      2) 已允許「相機」與「定位」權限
+      2) 已允許「相機」與「定位」權限<br/>
+      3) 盡量用 Safari / Chrome，不用 LINE 內建
     </p>
   </div>
 
+  <!-- =========================================================
+  【F. 字幕 UI】
+  ========================================================== -->
   <div id="subtitle"></div>
 
-  <!-- ✅ 不要 display:none！讓 A-Frame/AR.js 在手機上穩定初始化 -->
+  <!-- =========================================================
+  【G. A-Frame AR Scene】
+  ★重點：不要用 display:none 隱藏 scene（手機上易導致追蹤失效）
+  - facingMode: environment → 強制後鏡頭（更亮、更適合掃標）
+  - debugUIEnabled: false → 關閉 AR.js debug UI
+  ========================================================== -->
   <a-scene
     id="ar-scene"
     embedded
     renderer="logarithmicDepthBuffer: true;"
     vr-mode-ui="enabled: false"
-    arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best;">
+    arjs="sourceType: webcam; facingMode: environment; debugUIEnabled: false; trackingMethod: best;">
 
     <!-- Hiro marker -->
     <a-marker preset="hiro" id="dachen-marker">
+      <!-- 看到 marker 時，你會看到這個紅色方塊 -->
       <a-box position="0 0.5 0"
              material="color: red;"
              animation="property: rotation; to: 0 360 0; loop: true; dur: 2000">
       </a-box>
     </a-marker>
 
+    <!-- 相機 -->
     <a-entity camera></a-entity>
   </a-scene>
 
+  <!-- =========================================================
+  【H. 主程式區（JS）】
+  - H1：參數與狀態
+  - H2：初始化（HTTPS 檢查、定位啟動、事件綁定）
+  - H3：GPS 邏輯（距離計算、解鎖按鈕）
+  - H4：AR Marker 事件（found/lost）
+  - H5：音訊解鎖與播放（手機自動播放限制）
+  - H6：輔助：距離計算
+  ========================================================== -->
   <script>
-    // ====== 可調整參數 ======
+    /* =========================================================
+    【H1. 參數設定】
+    ========================================================== */
+
+    // 你的 GAS API（保留原本網址）
     const gasAPI = "https://script.google.com/macros/s/AKfycbxhS77x8-ZTZXKYigLDGCZDKlQAv6vy7pPw2CZ8Kiby0Wp1UYLeJ_faTOfL1tY1vCNwPA/exec";
 
-    // 測試目標座標（之後你可以改成 fetch(gasAPI) 拿）
+    // 目標座標（之後可改成 fetch(gasAPI) 拿回來）
     let targetLat = 23.476;
     let targetLng = 120.441;
 
-    // 距離門檻（你想要不管距離就解鎖，也可以設成 Infinity）
+    // 解鎖距離門檻（公尺）
+    // 如果你想「不管距離直接解鎖」，把它設成 Infinity，或在 onGeoSuccess 直接 unlocked = true
     const UNLOCK_DISTANCE_M = 20;
 
-    // ====== DOM ======
+    // 音檔（先用測試 mp3，之後可改成從 GAS 回傳）
+    const AUDIO_URL = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+
+    /* =========================================================
+    【H2. 取得 DOM 與狀態變數】
+    ========================================================== */
     const uiLayer = document.getElementById("ui-layer");
     const statusText = document.getElementById("status-text");
     const distanceText = document.getElementById("distance-text");
     const startBtn = document.getElementById("start-btn");
     const subtitleUI = document.getElementById("subtitle");
     const debugUI = document.getElementById("debug");
-
     const marker = document.getElementById("dachen-marker");
-    // ===== 音訊設定 =====
+
+    // GPS 解鎖狀態
+    let unlocked = false;
+
+    // 音訊播放器（同一個全域 player）
     const audioPlayer = new Audio();
-    audioPlayer.src = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+    audioPlayer.src = AUDIO_URL;
     audioPlayer.loop = true;
     audioPlayer.preload = "auto";
 
-    let audioUnlocked = false;  // 是否已完成「使用者互動解鎖音訊」
-    let isPlaying = false;      // 避免 markerFound 重複觸發一直 play
-    let unlocked = false;
-    let lastDist = null;
+    // iOS/Android 常需要「使用者互動」才允許播放
+    let audioUnlocked = false;
 
-    // ====== 小工具 ======
+    // 避免 markerFound 重複觸發造成多次 play()
+    let isPlaying = false;
+
+    /* =========================================================
+    【H3. 小工具：Debug / HTTPS 檢查】
+    ========================================================== */
     function setDebug(msg){
       debugUI.textContent = msg;
       console.log(msg);
     }
 
     function isSecureContextOK(){
-      // iOS Safari/Chrome 都需要 https 才能穩定用相機
+      // iOS Safari/Chrome 基本上需要 https 才能用相機/定位
       return window.isSecureContext || location.hostname === "localhost";
     }
 
-    // ====== 初始化 ======
+    /* =========================================================
+    【H4. 初始化入口】
+    ========================================================== */
     window.addEventListener("load", () => {
+      // 1) HTTPS 檢查
       if (!isSecureContextOK()) {
         statusText.textContent = "❌ 網址不是 HTTPS，手機通常無法開相機/定位";
         setDebug("Not secure context. Use HTTPS.");
@@ -160,29 +220,22 @@
       statusText.textContent = "正在取得定位權限…";
       setDebug("Page loaded. Waiting for geolocation...");
 
-      // 先讓使用者點一下（iOS 對某些權限/音訊/相機啟動更友善）
-     startBtn.addEventListener("click", async () => {
-  // 先解鎖音訊（iOS/Android 常需要）
-  if (!audioUnlocked) {
-    try {
-      await audioPlayer.play();   // 先播放一下
-      audioPlayer.pause();        // 再暫停
-      audioPlayer.currentTime = 0;
-      audioUnlocked = true;
-      console.log("Audio unlocked ✅");
-    } catch (e) {
-      console.log("Audio unlock failed (still ok):", e);
-    }
-  }
+      // 2) 按鈕：開始掃描（同時解鎖音訊）
+      startBtn.addEventListener("click", onStartScanClick);
 
-  // 把 UI 蓋掉，開始掃
-  uiLayer.style.display = "none";
-});
-
+      // 3) 啟動 GPS 監聽
       startGeolocation();
+
+      // 4) 綁定 marker 事件
       bindMarkerEvents();
+
+      // （可選）嘗試提亮相機（不保證每台手機有效）
+      // setTimeout(tryBoostCameraExposure, 1200);
     });
 
+    /* =========================================================
+    【H5. GPS：啟動與回呼】
+    ========================================================== */
     function startGeolocation(){
       if (!navigator.geolocation) {
         statusText.textContent = "❌ 瀏覽器不支援 GPS";
@@ -196,48 +249,12 @@
         timeout: 15000
       });
     }
-    async function tryBoostCameraExposure(){
-  try {
-    // A-Frame 會建立 <video> 元素，AR.js 用它當相機來源
-    const video = document.querySelector("video");
-    if (!video || !video.srcObject) return;
 
-    const track = video.srcObject.getVideoTracks()[0];
-    if (!track) return;
-
-    const caps = track.getCapabilities ? track.getCapabilities() : null;
-    console.log("Camera caps:", caps);
-
-    // 盡可能用「通用且不容易爆」的 constraints
-    const constraints = {};
-
-    // 這兩個在部分 Android 會有效，iOS 多半不理
-    if (caps?.exposureMode) constraints.exposureMode = "continuous";
-    if (caps?.whiteBalanceMode) constraints.whiteBalanceMode = "continuous";
-
-    // 下面幾個看手機支援度（Android 部分機型有效）
-    // 若 caps 沒有就不設，避免報錯
-    if (caps?.brightness) constraints.brightness = caps.brightness.max;
-    if (caps?.contrast) constraints.contrast = caps.contrast.max;
-    if (caps?.saturation) constraints.saturation = caps.saturation.max;
-
-    // 有些機型提供 exposureCompensation（最有用）
-    if (caps?.exposureCompensation) constraints.exposureCompensation = caps.exposureCompensation.max;
-
-    if (Object.keys(constraints).length === 0) return;
-
-    await track.applyConstraints({ advanced: [constraints] });
-    console.log("Applied camera constraints:", constraints);
-  } catch (e) {
-    console.warn("applyConstraints failed (ignored):", e);
-  }
-}
     function onGeoSuccess(position){
       const userLat = position.coords.latitude;
       const userLng = position.coords.longitude;
 
       const dist = calculateDistance(userLat, userLng, targetLat, targetLng);
-      lastDist = dist;
       distanceText.textContent = `距離目標約 ${Math.round(dist)} 公尺`;
 
       setDebug(
@@ -245,11 +262,13 @@
         `user: ${userLat.toFixed(6)}, ${userLng.toFixed(6)}\n` +
         `target: ${targetLat}, ${targetLng}\n` +
         `dist: ${dist.toFixed(1)}m\n` +
-        `unlocked: ${unlocked}`
+        `unlocked: ${unlocked}\n` +
+        `audioUnlocked: ${audioUnlocked}\n` +
+        `isPlaying: ${isPlaying}`
       );
 
       // 解鎖條件：距離 <= 門檻
-      // 如果你要「不管距離直接解鎖」，就把 if 改成：if (!unlocked) { ... }
+      // 若你要「不管距離直接解鎖」，改成：if (!unlocked) { unlocked = true; ... }
       if (!unlocked && dist <= UNLOCK_DISTANCE_M) {
         unlocked = true;
         statusText.textContent = "✅ 已到達範圍，請按「開始掃描 Hiro」";
@@ -265,39 +284,116 @@
       setDebug("Geo error: " + (err && err.message ? err.message : "unknown"));
     }
 
-    function bindMarkerEvents(){
-      // 注意：這段只有在 JS 沒語法錯誤 + AR 正常初始化時才會觸發
-     marker.addEventListener("markerFound", async () => {
-  console.log("找到標籤！觸發導覽");
+    /* =========================================================
+    【H6. 使用者點擊「開始掃描」】
+    - 目的 1：把 UI layer 隱藏，讓使用者看到 AR 相機畫面
+    - 目的 2：先做一次 play/pause → 解鎖手機自動播放限制
+    ========================================================== */
+    async function onStartScanClick(){
+      // 1) 嘗試解鎖音訊（iOS/Android 很重要）
+      if (!audioUnlocked) {
+        try {
+          await audioPlayer.play();   // 先播放一下
+          audioPlayer.pause();        // 再暫停
+          audioPlayer.currentTime = 0;
+          audioUnlocked = true;
+          console.log("Audio unlocked ✅");
+        } catch (e) {
+          console.log("Audio unlock failed (still ok):", e);
+          // 就算解鎖失敗也不要卡住流程，後面 markerFound 會再試一次
+        }
+      }
 
-  // 1) 顯示字幕
-  subtitleUI.innerText = "歡迎來到大陳新村！(大陳語音導覽播放中...)";
-  subtitleUI.style.display = "block";
-
-  // 2) 播放音訊（避免重複播放）
-  if (!isPlaying) {
-    try {
-      await audioPlayer.play();
-      isPlaying = true;
-    } catch (error) {
-      console.log("瀏覽器阻擋播放，需要先點擊螢幕", error);
-      subtitleUI.innerText = "請點擊螢幕任意處以播放聲音";
+      // 2) 隱藏 UI，開始掃描
+      uiLayer.style.display = "none";
     }
-  }
-});
 
-marker.addEventListener("markerLost", () => {
-  console.log("標籤遺失！停止導覽");
+    /* =========================================================
+    【H7. Marker 事件：markerFound / markerLost】
+    - markerFound：掃到 Hiro（紅方塊出現）→ 顯示字幕 + 播放語音
+    - markerLost：移開 Hiro → 隱藏字幕 + 暫停語音
+    ========================================================== */
+    function bindMarkerEvents(){
+      marker.addEventListener("markerFound", async () => {
+        console.log("找到標籤！觸發導覽");
+        setDebug(debugUI.textContent + "\nmarkerFound ✅");
 
-  // 1) 隱藏字幕
-  subtitleUI.style.display = "none";
+        // 1) 顯示字幕
+        subtitleUI.innerText = "歡迎來到大陳新村！(語音導覽播放中...)";
+        subtitleUI.style.display = "block";
 
-  // 2) 停止音訊
-  audioPlayer.pause();
-  isPlaying = false;
-});
+        // 2) 播放音訊（避免重複播放）
+        if (!isPlaying) {
+          try {
+            await audioPlayer.play();
+            isPlaying = true;
+          } catch (error) {
+            console.log("瀏覽器阻擋播放，需要先點擊螢幕", error);
+            subtitleUI.innerText = "請點擊螢幕任意處以播放聲音";
+          }
+        }
+      });
 
-    // Haversine
+      marker.addEventListener("markerLost", () => {
+        console.log("標籤遺失！停止導覽");
+        setDebug(debugUI.textContent + "\nmarkerLost");
+
+        // 1) 隱藏字幕
+        subtitleUI.style.display = "none";
+
+        // 2) 暫停音訊
+        audioPlayer.pause();
+        isPlaying = false;
+      });
+
+      // 保險：若 markerFound 時被擋播放，使用者「任意點擊」就再嘗試播放
+      document.body.addEventListener("click", async () => {
+        if (subtitleUI.style.display === "block" && !isPlaying) {
+          try {
+            await audioPlayer.play();
+            isPlaying = true;
+            subtitleUI.innerText = "歡迎來到大陳新村！(語音導覽播放中...)";
+          } catch (e) {
+            console.log("Still blocked:", e);
+          }
+        }
+      }, { passive: true });
+    }
+
+    /* =========================================================
+    【H8. （可選）嘗試提亮相機】
+    - 有些 Android 機型有效，iOS 通常不理
+    - 失敗會忽略，不會讓相機掛掉
+    ========================================================== */
+    async function tryBoostCameraExposure(){
+      try {
+        const video = document.querySelector("video");
+        if (!video || !video.srcObject) return;
+
+        const track = video.srcObject.getVideoTracks()[0];
+        if (!track) return;
+
+        const caps = track.getCapabilities ? track.getCapabilities() : null;
+        console.log("Camera caps:", caps);
+
+        const constraints = {};
+        if (caps?.exposureMode) constraints.exposureMode = "continuous";
+        if (caps?.whiteBalanceMode) constraints.whiteBalanceMode = "continuous";
+        if (caps?.exposureCompensation) constraints.exposureCompensation = caps.exposureCompensation.max;
+        if (caps?.brightness) constraints.brightness = caps.brightness.max;
+
+        if (Object.keys(constraints).length === 0) return;
+        await track.applyConstraints({ advanced: [constraints] });
+
+        console.log("Applied camera constraints:", constraints);
+      } catch (e) {
+        console.warn("applyConstraints failed (ignored):", e);
+      }
+    }
+
+    /* =========================================================
+    【H9. 距離計算（Haversine）】
+    ========================================================== */
     function calculateDistance(lat1, lon1, lat2, lon2) {
       const R = 6371e3;
       const φ1 = lat1 * Math.PI/180;
@@ -316,5 +412,3 @@ marker.addEventListener("markerLost", () => {
 
 </body>
 </html>
-
-
