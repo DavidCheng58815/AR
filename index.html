@@ -73,10 +73,14 @@
       const dist = calculateDistance(userLat, userLng, targetLat, targetLng);
       document.getElementById('distance-text').innerText = `距離目標還有 ${Math.round(dist)} 公尺`;
 
+     // 【修改這裡】：不要管距離多少了，直接解鎖 AR 相機！
+      uiLayer.style.display = "none"; // 隱藏等待畫面
+      arScene.style.display = "block"; // 開啟 AR 相機
+      
       // 假設距離小於 20 公尺，解鎖 AR 掃描
-      if (dist <= 20) {
-        uiLayer.style.display = "none"; // 隱藏等待畫面
-        arScene.style.display = "block"; // 開啟 AR 相機
+    //  if (dist <= 20) {
+    //    uiLayer.style.display = "none"; // 隱藏等待畫面
+    //    arScene.style.display = "block"; // 開啟 AR 相機
         // 此時系統會要求使用者允許相機權限
       }
     }
@@ -114,4 +118,5 @@
     }
   </script>
 </body>
+
 </html>
