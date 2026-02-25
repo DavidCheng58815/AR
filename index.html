@@ -1,144 +1,246 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>大陳文化 WebAR 導覽</title>
-  <script>
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-      navigator.mediaDevices.getUserMedia = function(constraints) {
-        if (constraints && constraints.video) {
-          // 如果原本是 boolean，轉成 object
-          if (typeof constraints.video === 'boolean') {
-            constraints.video = {};
-          }
-          // 強制塞入進階感光參數
-          constraints.video.advanced = [
-            { exposureMode: "continuous" },
-            { whiteBalanceMode: "continuous" }
-          ];
-        }
-        console.log("已攔截並注入相機曝光參數:", constraints);
-        return originalGetUserMedia(constraints);
-      };
-    }
-  </script>
+
+  <!-- A-Frame / AR.js -->
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+
   <style>
-    /* 蓋在 AR 鏡頭上的 UI 層 */
-    #ui-layer {
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.8); color: white; z-index: 999;
-      display: flex; flex-direction: column; justify-content: center; align-items: center;
-      font-family: sans-serif;
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+
+    /* UI 蓋在 AR 上層 */
+    #ui-layer{
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.82);
+      color: #fff;
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 18px;
+      gap: 10px;
     }
-    #subtitle { position: absolute; bottom: 10%; background: rgba(0,0,0,0.6); padding: 10px; font-size: 18px; display: none; }
+
+    #distance-text { opacity: 0.9; }
+
+    #subtitle {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 10%;
+      max-width: 92%;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 18px;
+      display: none;
+      z-index: 998;
+      line-height: 1.4;
+    }
+
+    #debug {
+      position: fixed;
+      left: 10px;
+      top: 10px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      z-index: 1000;
+      max-width: 92%;
+      white-space: pre-wrap;
+    }
+
+    button{
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+    }
   </style>
 </head>
-<body style="margin: 0; overflow: hidden;">
 
+<body>
+
+  <!-- Debug 區（你測試用，正式可拿掉） -->
+  <div id="debug">debug...</div>
+
+  <!-- UI 遮罩：先拿 GPS，確認後才讓使用者開始掃描 -->
   <div id="ui-layer">
-    <h2 id="status-text">正在取得您的 GPS 位置...</h2>
+    <h2 id="status-text">正在初始化…</h2>
     <p id="distance-text"></p>
+    <button id="start-btn" style="display:none;">開始掃描 Hiro</button>
+    <p style="opacity:.8; font-size:14px; margin-top:8px;">
+      若無法開相機，請確認：<br/>
+      1) 網址是 HTTPS<br/>
+      2) 已允許「相機」與「定位」權限
+    </p>
   </div>
 
   <div id="subtitle"></div>
 
-  <a-scene 
+  <!-- ✅ 不要 display:none！讓 A-Frame/AR.js 在手機上穩定初始化 -->
+  <a-scene
     id="ar-scene"
-    embedded 
-    arjs="sourceType: webcam; debugUIEnabled: false;"
-    style="display: none;">
-    
+    embedded
+    renderer="logarithmicDepthBuffer: true;"
+    vr-mode-ui="enabled: false"
+    arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best;">
+
+    <!-- Hiro marker -->
     <a-marker preset="hiro" id="dachen-marker">
-      <a-box position="0 0.5 0" material="color: red;" animation="property: rotation; to: 0 360 0; loop: true; dur: 2000"></a-box>
+      <a-box position="0 0.5 0"
+             material="color: red;"
+             animation="property: rotation; to: 0 360 0; loop: true; dur: 2000">
+      </a-box>
     </a-marker>
-    
+
     <a-entity camera></a-entity>
   </a-scene>
 
   <script>
-    // 你的 GAS API 網址
-    const gasAPI = "https://script.google.com/macros/s/AKfycbxhS77x8-ZTZXKYigLDGCZDKlQAv6vy7pPw2CZ8Kiby0Wp1UYLeJ_faTOfL1tY1vCNwPA/exec"; 
-    
-    // 假設我們從 GAS 抓回來的目標座標 (OpenLab 測試點)
-    let targetLat = 23.476; // 替換為你的測試緯度
-    let targetLng = 120.441; // 替換為你的測試經度
-    let targetAudio = "";
-    let targetSubtitle = "";
+    // ====== 可調整參數 ======
+    const gasAPI = "https://script.google.com/macros/s/AKfycbxhS77x8-ZTZXKYigLDGCZDKlQAv6vy7pPw2CZ8Kiby0Wp1UYLeJ_faTOfL1tY1vCNwPA/exec";
 
-    const uiLayer = document.getElementById('ui-layer');
-    const statusText = document.getElementById('status-text');
-    const arScene = document.getElementById('ar-scene');
-    const marker = document.getElementById('dachen-marker');
-    const subtitleUI = document.getElementById('subtitle');
-    let audioPlayer = new Audio();
+    // 測試目標座標（之後你可以改成 fetch(gasAPI) 拿）
+    let targetLat = 23.476;
+    let targetLng = 120.441;
 
-    // 1. 初始化：先去 GAS 抓資料 (這裡簡化，直接啟動 GPS)
-    // 實際開發可以在這裡 fetch(gasAPI) 取得資料後再啟動 GPS
-    
-    // 2. 啟動 GPS 監聽
-    if (navigator.geolocation) {
-      navigator.geolocation.watchPosition(success, error, { enableHighAccuracy: true });
-    } else {
-      statusText.innerText = "您的瀏覽器不支援 GPS";
+    // 距離門檻（你想要不管距離就解鎖，也可以設成 Infinity）
+    const UNLOCK_DISTANCE_M = 20;
+
+    // ====== DOM ======
+    const uiLayer = document.getElementById("ui-layer");
+    const statusText = document.getElementById("status-text");
+    const distanceText = document.getElementById("distance-text");
+    const startBtn = document.getElementById("start-btn");
+    const subtitleUI = document.getElementById("subtitle");
+    const debugUI = document.getElementById("debug");
+
+    const marker = document.getElementById("dachen-marker");
+
+    let unlocked = false;
+    let lastDist = null;
+
+    // ====== 小工具 ======
+    function setDebug(msg){
+      debugUI.textContent = msg;
+      console.log(msg);
     }
 
-    function success(position) {
+    function isSecureContextOK(){
+      // iOS Safari/Chrome 都需要 https 才能穩定用相機
+      return window.isSecureContext || location.hostname === "localhost";
+    }
+
+    // ====== 初始化 ======
+    window.addEventListener("load", () => {
+      if (!isSecureContextOK()) {
+        statusText.textContent = "❌ 網址不是 HTTPS，手機通常無法開相機/定位";
+        setDebug("Not secure context. Use HTTPS.");
+        return;
+      }
+
+      statusText.textContent = "正在取得定位權限…";
+      setDebug("Page loaded. Waiting for geolocation...");
+
+      // 先讓使用者點一下（iOS 對某些權限/音訊/相機啟動更友善）
+      startBtn.addEventListener("click", () => {
+        // 只要解鎖，就把 UI 蓋掉，開始掃
+        uiLayer.style.display = "none";
+      });
+
+      startGeolocation();
+      bindMarkerEvents();
+    });
+
+    function startGeolocation(){
+      if (!navigator.geolocation) {
+        statusText.textContent = "❌ 瀏覽器不支援 GPS";
+        setDebug("Geolocation not supported.");
+        return;
+      }
+
+      navigator.geolocation.watchPosition(onGeoSuccess, onGeoError, {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 15000
+      });
+    }
+
+    function onGeoSuccess(position){
       const userLat = position.coords.latitude;
       const userLng = position.coords.longitude;
-      
-      // 計算距離 (單位：公尺)
-      const dist = calculateDistance(userLat, userLng, targetLat, targetLng);
-      document.getElementById('distance-text').innerText = `距離目標還有 ${Math.round(dist)} 公尺`;
 
-     // 【修改這裡】：不要管距離多少了，直接解鎖 AR 相機！
-      uiLayer.style.display = "none"; // 隱藏等待畫面
-      arScene.style.display = "block"; // 開啟 AR 相機
-      
-      // 假設距離小於 20 公尺，解鎖 AR 掃描
-    //  if (dist <= 20) {
-    //    uiLayer.style.display = "none"; // 隱藏等待畫面
-    //    arScene.style.display = "block"; // 開啟 AR 相機
-        // 此時系統會要求使用者允許相機權限
+      const dist = calculateDistance(userLat, userLng, targetLat, targetLng);
+      lastDist = dist;
+      distanceText.textContent = `距離目標約 ${Math.round(dist)} 公尺`;
+
+      setDebug(
+        `GPS OK\n` +
+        `user: ${userLat.toFixed(6)}, ${userLng.toFixed(6)}\n` +
+        `target: ${targetLat}, ${targetLng}\n` +
+        `dist: ${dist.toFixed(1)}m\n` +
+        `unlocked: ${unlocked}`
+      );
+
+      // 解鎖條件：距離 <= 門檻
+      // 如果你要「不管距離直接解鎖」，就把 if 改成：if (!unlocked) { ... }
+      if (!unlocked && dist <= UNLOCK_DISTANCE_M) {
+        unlocked = true;
+        statusText.textContent = "✅ 已到達範圍，請按「開始掃描 Hiro」";
+        startBtn.style.display = "inline-block";
+      } else if (!unlocked) {
+        statusText.textContent = "請靠近目標點以解鎖掃描…";
+        startBtn.style.display = "none";
       }
     }
 
-    function error() {
-      statusText.innerText = "無法取得位置，請確認是否開啟手機定位權限。";
+    function onGeoError(err){
+      statusText.textContent = "❌ 無法取得位置，請確認已開啟定位權限";
+      setDebug("Geo error: " + (err && err.message ? err.message : "unknown"));
     }
 
-    // 3. 監聽 AR 標籤掃描狀態
-    marker.addEventListener('markerFound', () => {
-      // 掃描到皮箱圖！播放聲音與顯示字幕
-      console.log("找到標籤！");
-      subtitleUI.innerText = "歡迎來到大陳新村！(大陳語音播放中...)";
-      subtitleUI.style.display = "block";
-      // audioPlayer.src = targetAudio; // 填入從 GAS 拿到的音檔路徑
-      // audioPlayer.play();
-    });
+    function bindMarkerEvents(){
+      // 注意：這段只有在 JS 沒語法錯誤 + AR 正常初始化時才會觸發
+      marker.addEventListener("markerFound", () => {
+        setDebug("markerFound ✅");
+        subtitleUI.textContent = "找到 Hiro！歡迎來到大陳新村！（語音可在此播放）";
+        subtitleUI.style.display = "block";
+        // audioPlayer.play() 之類建議也在「使用者點擊 startBtn 後」再做，iOS 才不會擋
+      });
 
-    marker.addEventListener('markerLost', () => {
-      // 離開標籤範圍，停止播放
-      subtitleUI.style.display = "none";
-      // audioPlayer.pause();
-    });
+      marker.addEventListener("markerLost", () => {
+        setDebug("markerLost");
+        subtitleUI.style.display = "none";
+      });
+    }
 
-    // 輔助函數：計算兩點經緯度距離 (Haversine 公式)
+    // Haversine
     function calculateDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371e3; // 地球半徑 (公尺)
+      const R = 6371e3;
       const φ1 = lat1 * Math.PI/180;
       const φ2 = lat2 * Math.PI/180;
       const Δφ = (lat2-lat1) * Math.PI/180;
       const Δλ = (lon2-lon1) * Math.PI/180;
-      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
+
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
       return R * c;
     }
   </script>
+
 </body>
-
 </html>
-
-
